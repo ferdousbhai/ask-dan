@@ -56,7 +56,6 @@ async def webhook(request: Request):
             },
             "created_at": tg_message.get("date"),
         }
-        logging.info("Processing received message... ⏳")
         process_received_message.spawn(openai_message)
     return {"status": "ok"}
 
@@ -104,8 +103,7 @@ async def process_received_message(message):
         )
         # In case the user switches topic, assistant should save the conversation context to memory by calling the `save_conversation` function and reset the context for the new topic."
         lessons: list[Knowledge] | None = Field(
-            description="Assistant will remember this for future conversations.",
-            default=None,
+            description="Assistant will remember this for future conversations."
         )
 
     output = client.chat.completions.create(
