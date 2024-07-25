@@ -4,7 +4,8 @@ from pydantic import BaseModel, Field
 from fastapi import Request
 import logging
 from datetime import datetime, timezone
-from markdown_v2_formatter import convert_to_markdown_v2
+
+from utils.markdown_v2_formatter import convert_to_markdown_v2
 
 logging.basicConfig(level=logging.INFO)
 
@@ -35,10 +36,11 @@ class Output(BaseModel):
 @app.function(keep_warm=1)
 @web_endpoint(method="POST")
 async def webhook(request: Request):
-    tg_message = (await request.json())["message"]
+    data = await request.json()
+    tg_message = data["message"]
     logging.info(f"Received telegram message: {tg_message}")
 
-    if tg_message.get("text"):
+    if tg_message and tg_message.get("text"):
         process_received_message.spawn(
             {
                 "id": tg_message.get("message_id"),
@@ -83,7 +85,7 @@ def get_openai_response(
     context,
     last_assistance_response,
     created_at,
-    model="gpt-4o",
+    model="gpt-4o-mini",
 ):
     import instructor
     from openai import OpenAI
@@ -99,10 +101,8 @@ def get_openai_response(
                     "role": "system",
                     "content": (
                         "You are Dan, a kind, helpful assistant."
-                        "Respond directly to user messages without unnecessary affirmative phrases or filler words. Avoid chatty behavior."
-                        f"You are chatting with {message['metadata']['from']['first_name']} {message['metadata']['from']['last_name']} in a {message['metadata']['chat']['type']} chat on telegram. You may occassionally refer to the user by their first name."
+                        f"You are chatting with {message['metadata']['from']['first_name']} {message['metadata']['from']['last_name']} in a {message['metadata']['chat']['type']} chat on telegram."
                         "Keep responses short and concise. If you need to explain something in more detail, you can do so by sending multiple short messages."
-                        "You can use Markdown if needed."
                         f"Current date and time is {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')}"
                         f"The last message from the assistant was generated at {datetime.fromtimestamp(created_at).strftime('%Y-%m-%d %H:%M:%S')}."
                         if created_at
