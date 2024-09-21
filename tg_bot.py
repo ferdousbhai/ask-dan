@@ -6,6 +6,7 @@ import logging
 from datetime import datetime, timezone
 
 from utils.markdown_v2_formatter import convert_to_markdown_v2
+from system_prompt import get_system_prompt
 
 logging.basicConfig(level=logging.INFO)
 
@@ -13,8 +14,12 @@ logging.basicConfig(level=logging.INFO)
 app = App("ask-dan-telegram-bot")
 
 
-image = Image.debian_slim(python_version="3.12").run_commands(
-    ["pip install --upgrade fastapi pydantic openai instructor python-telegram-bot"]
+llm_image = Image.debian_slim(python_version="3.12").run_commands(
+    ["pip install --upgrade fastapi pydantic openai instructor"]
+)
+
+telegram_image = Image.debian_slim(python_version="3.12").run_commands(
+    ["pip install python-telegram-bot"]
 )
 
 
@@ -23,7 +28,7 @@ conversation_dict = Dict.from_name("dan-conversation-state", create_if_missing=T
 
 class Output(BaseModel):
     thoughts: str | None = Field(
-        description="Assistant's thoughts about the user query. Assistant is encouraged to think deeply about the query and why the user might be asking that, and ask follow-up questions. If the query is simple, assistant can skip this step."
+        description="Assistant's thoughts about the user query. If the query is simple, assistant can skip this step. Assistant is encouraged to think deeply about the query and why the user might be asking that, and ask follow-up questions."
     )
     text_messages: list[str] | None = Field(
         description="The responses to the user. It can be skipped if the assistant believes that the user has not completed the query yet and is still in the process of communicating more information, as the assistant waits for the user to finish the query."
@@ -33,7 +38,7 @@ class Output(BaseModel):
     )
 
 
-@app.function(keep_warm=1)
+@app.function()
 @web_endpoint(method="POST")
 async def webhook(request: Request):
     data = await request.json()
@@ -70,73 +75,60 @@ def get_conversation_data(chat_id):
     return context, last_assistance_response, created_at
 
 
-def save_conversation_data(chat_id, output):
+def save_conversation_data(chat_id, text_messages, updated_conversation_context):
     conversation_dict[chat_id] = {
-        "assistance_response": output.text_messages,
-        "context": output.updated_conversation_context,
+        "assistance_response": text_messages,
+        "context": updated_conversation_context,
         "created_at": int(datetime.now(timezone.utc).timestamp()),
     }
+
     logging.info("Stored updated context and assistance response to dict.")
 
 
-def get_openai_response(
+@app.function(image=llm_image, secrets=[Secret.from_name("openai")])
+async def get_llm_response(
     chat_id,
     message,
-    context,
-    last_assistance_response,
-    created_at,
-    model="gpt-4o-mini",
-):
+    context: str | None = None,
+    last_assistance_response: list[str] | None = None,
+    created_at: int | None = None,
+    model="gpt-4o",
+) -> tuple[list[str], str]:
+    import openai
     import instructor
-    from openai import OpenAI
 
-    client = instructor.from_openai(OpenAI())
+    client = instructor.from_openai(openai.AsyncOpenAI())
 
-    try:
-        output = client.chat.completions.create(
-            model=model,
-            response_model=Output,
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "You are Dan, a kind, helpful assistant."
-                        f"You are chatting with {message['metadata']['from']['first_name']} {message['metadata']['from']['last_name']} in a {message['metadata']['chat']['type']} chat on telegram."
-                        "Keep responses short and concise. If you need to explain something in more detail, you can do so by sending multiple short messages."
-                        f"Current date and time is {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')}"
-                        f"The last message from the assistant was generated at {datetime.fromtimestamp(created_at).strftime('%Y-%m-%d %H:%M:%S')}."
-                        if created_at
-                        else "" f"<context>{context}</context>"
-                        if context
-                        else ""
-                    ),
-                },
-                *(
-                    [
-                        {
-                            "role": "assistant",
-                            "content": response,
-                        }
-                        for response in last_assistance_response
-                    ]
-                    if last_assistance_response
-                    else []
-                ),
-                {"role": "user", "content": message["content"]},
-            ],
-            temperature=0.8,
-        )
-        logging.info(f"Output: {output}")
-        return output
-    except Exception as e:
-        logging.error(f"Error getting openai response: {e}")
-        return None
+    response = await client.chat.completions.create(
+        model=model,
+        response_model=Output,
+        messages=[
+            {
+                "role": "system",
+                "content": get_system_prompt(message, context, created_at),
+            },
+            *(
+                [
+                    {
+                        "role": "assistant",
+                        "content": response,
+                    }
+                    for response in last_assistance_response
+                ]
+                if last_assistance_response
+                else []
+            ),
+            {"role": "user", "content": message["content"]},
+        ],
+        temperature=0.8,
+    )
+    logging.info(f"LLM response: {response}")
+    return (response.text_messages, response.updated_conversation_context)
 
 
 @app.function(
-    image=image,
-    secrets=[Secret.from_name("openai"), Secret.from_name("telegram")],
-    keep_warm=1,
+    image=telegram_image,
+    secrets=[Secret.from_name("telegram")],
 )
 async def process_received_message(message):
     from telegram import Bot
@@ -145,20 +137,29 @@ async def process_received_message(message):
     chat_id = message["metadata"]["chat"]["id"]
 
     bot = Bot(os.environ["ASK_DAN_BOT_TOKEN"])
+
     await bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
 
     context, last_assistance_response, created_at = get_conversation_data(chat_id)
 
-    output = get_openai_response(
+    text_messages, updated_conversation_context = get_llm_response.remote(
         chat_id, message, context, last_assistance_response, created_at
     )
 
-    save_conversation_data(chat_id, output)
+    save_conversation_data(chat_id, text_messages, updated_conversation_context)
 
-    if output.text_messages:
-        for text in output.text_messages:
+    if text_messages:
+        for text in text_messages:
             await bot.send_message(
                 text=convert_to_markdown_v2(text),
                 chat_id=chat_id,
                 parse_mode="MarkdownV2",
             )
+
+
+@app.local_entrypoint()
+async def test_llm():
+    output = get_llm_response.remote(
+        chat_id=123, message={"role": "user", "content": "Hello"}
+    )
+    print(output)

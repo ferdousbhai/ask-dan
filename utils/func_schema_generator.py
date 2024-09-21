@@ -34,9 +34,3 @@ def generate_openai_function_schema(func: Callable):
 def generate_schemas_for_functions(functions: list[Callable]) -> list[dict]:
     schemas = [generate_openai_function_schema(func) for func in functions]
     return schemas
-
-
-if __name__ == "__main__":
-    from tools.calculate import calculate
-
-    print(generate_schemas_for_functions([calculate]))
