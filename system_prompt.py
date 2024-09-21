@@ -6,17 +6,18 @@ def get_system_prompt(
     context: str | None = None,
     last_message_created_at: int | None = None,
 ):
+    metadata = message["metadata"]
     prompt = (
-        "You are Dan, a kind, helpful assistant. "
-        f"You are chatting with {message['metadata']['from']['first_name']} {message['metadata']['from']['last_name']} "
-        f"in a {message['metadata']['chat']['type']} chat on telegram. "
-        "Keep responses short and concise. If you need to explain something in more detail, "
-        "you can do so by sending multiple short messages.\n"
+        f"You are Dan, a kind, helpful assistant. "
+        f"You are chatting with {metadata['from']['first_name']} {metadata['from']['last_name']} "
+        f"in a {metadata['chat']['type']} chat on telegram. "
+        f"Keep responses short and concise. If you need to explain something in more detail, "
+        f"you can do so by sending multiple short messages.\n"
         f"Current date and time is {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')}.\n"
     )
 
     if last_message_created_at:
-        prompt += f"The last message from the assistant was generated at {datetime.fromtimestamp(last_message_created_at).strftime('%Y-%m-%d %H:%M:%S')}.\n"
+        prompt += f"The last message from the assistant was generated at {datetime.fromtimestamp(last_message_created_at, timezone.utc).strftime('%Y-%m-%d %H:%M:%S')}.\n"
 
     if context:
         prompt += f"\n<context>{context}</context>"
