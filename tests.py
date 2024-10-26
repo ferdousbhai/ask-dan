@@ -1,10 +1,8 @@
-from deploy import get_llm_response, update_conversation_summary
-from deploy import app
+from app import app, get_llm_response, update_conversation_summary
 
 @app.local_entrypoint()
 def test_llm():
     response = get_llm_response.remote(
-        chat_id=232,
         message={
             "content": "Analyze the major themes in George Orwell's 1984 and their relevance to modern society.",
             "metadata": {

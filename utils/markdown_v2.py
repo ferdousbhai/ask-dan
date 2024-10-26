@@ -24,6 +24,9 @@ def convert_to_markdown_v2(text):
         "!",
     ]
 
+    # Convert headings to bold before escaping
+    text = re.sub(r'^#{1,6}\s+(.+)$', r'**\1**', text, flags=re.MULTILINE)
+
     # Escape special characters
     for char in special_chars:
         text = text.replace(char, "\\" + char)
