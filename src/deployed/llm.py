@@ -31,7 +31,16 @@ def get_online_model_response(context: str, prompt: str) -> str | Exception:
             temperature=0.8,
             max_tokens=1024,
         )
-        return response.choices[0].message.content
+        
+        # Extract content and citations
+        content = response.choices[0].message.content
+        citations = response.citations if hasattr(response, 'citations') else []
+        
+        # Append citations to the response if they exist
+        if citations:
+            content += "\n\nSources:\n" + "\n".join(f"- {citation}" for citation in citations)
+            
+        return content
     except Exception as e:
         logging.exception("Error in Perplexity API call")
         return e

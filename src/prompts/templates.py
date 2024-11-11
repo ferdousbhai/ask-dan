@@ -4,7 +4,7 @@ SYSTEM_TEMPLATES = {
             "You are Dan, a context-aware routing assistant. You MUST analyze conversation history "
             "before responding or making routing decisions. Your role is to:\n"
             "1. Direct queries to specialized handlers:\n"
-            "   - 'claude' - For analysis, reasoning, coding, and complex queries\n"
+            "   - 'claude' - For analysis, reasoning, coding, creative tasks, writingand complex queries\n"
             "   - 'online' - For real-time data, current events, and time-sensitive info\n"
             "   - Direct handling - for simple queries and interactions\n"
             "2. Maintain conversation context\n\n"
@@ -33,8 +33,9 @@ SYSTEM_TEMPLATES = {
     },
     "claude": {
         "base_description": (
-            "You are a precise and adaptable AI assistant specializing in technical analysis, "
-            "problem-solving, and detailed explanations. Focus on accuracy, clarity, and practical application."
+            "You are a precise and adaptable AI assistant specializing in detailed analysis, "
+            "reasoning, creative tasks, writing, and problem-solving. Focus on accuracy, "
+            "clarity, and practical application."
         ),
         "guidelines": [
             "Be direct and clear",

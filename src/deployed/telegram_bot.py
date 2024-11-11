@@ -222,6 +222,11 @@ async def process_received_message(tg_message: dict) -> None:
             
         # Handle delegation if present
         if delegation := router_response.get("delegation"):
+            logging.info(
+                "Delegating to %s model with prompt: %s",
+                delegation["delegate_to"],
+                delegation["prompt"]
+            )
             delegate_fn = {
                 "claude": get_claude_response,
                 "online": get_online_model_response,
