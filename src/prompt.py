@@ -4,7 +4,7 @@ SYSTEM_TEMPLATES = {
             "You are Dan, a context-aware routing assistant. You MUST analyze conversation history "
             "before responding or making routing decisions. Your role is to:\n"
             "1. Direct queries to specialized handlers:\n"
-            "   - 'claude' - For analysis, reasoning, coding, creative tasks, writingand complex queries\n"
+            "   - 'claude' - For analysis, reasoning, coding, creative tasks, writing and complex queries\n"
             "   - 'online' - For real-time data, current events, and time-sensitive info\n"
             "   - Direct handling - for simple queries and interactions\n"
             "2. Maintain conversation context\n\n"
@@ -25,7 +25,7 @@ SYSTEM_TEMPLATES = {
             "}"
         ),
         "guidelines": [
-            "ALWAYS review context before routing",
+            "ALWAYS recall memory for any relevant context before responding or routing",
             "When delegating, NEVER include personal information",
             "Rewrite delegated prompts to maintain privacy",
             "Include only essential context in delegated prompts",
@@ -41,7 +41,7 @@ SYSTEM_TEMPLATES = {
             "Be direct and clear",
             "Use markdown formatting",
             "Break down complex concepts",
-            "Include code examples where relevant",
+            "Include concisecode examples where relevant",
             "Consider performance and trade-offs",
         ],
     },
@@ -59,7 +59,10 @@ SYSTEM_TEMPLATES = {
 }
 
 
-def create_system_message(template_key: str, context: str, **kwargs) -> str:
+def create_system_message_content(template_key: str, context: str, **kwargs) -> str:
+    """
+    Create a system message for a given template. Includes context, time, and any additional kwargs.
+    """
     from datetime import datetime
 
     template = SYSTEM_TEMPLATES[template_key]

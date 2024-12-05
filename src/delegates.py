@@ -1,21 +1,15 @@
 import logging
 import os
+from openai import OpenAI
+from anthropic import Anthropic
 
-from modal import Secret, App, Image
+from src.prompt import create_system_message_content
 
-from src.prompts.templates import create_system_message
+# Configure logging
+logging.basicConfig(level=logging.INFO)
 
-
-app = App("ask-llm")
-
-
-@app.function(
-    image=Image.debian_slim(python_version="3.12").pip_install("openai"),
-    secrets=[Secret.from_name("perplexity")],
-)
 def get_online_model_response(context: str, prompt: str) -> str | Exception:
-    from openai import OpenAI
-
+    """Get response from Perplexity API."""
     try:
         client = OpenAI(
             api_key=os.environ["PERPLEXITY_API_KEY"],
@@ -25,7 +19,7 @@ def get_online_model_response(context: str, prompt: str) -> str | Exception:
         response = client.chat.completions.create(
             model="llama-3.1-sonar-large-128k-online",
             messages=[
-                {"role": "system", "content": create_system_message("online", context)},
+                {"role": "system", "content": create_system_message_content("online", context)},
                 {"role": "user", "content": prompt},
             ],
             temperature=0.8,
@@ -45,25 +39,21 @@ def get_online_model_response(context: str, prompt: str) -> str | Exception:
         logging.exception("Error in Perplexity API call")
         return e
 
-
-@app.function(
-    image=Image.debian_slim(python_version="3.12").pip_install("anthropic"),
-    secrets=[Secret.from_name("anthropic")],
-)
 def get_claude_response(
     context: str,
     prompt: str,
-    model: str = "claude-3-5-sonnet-latest",
+    model: str = "claude-3-sonnet-20240229",
     temperature: float = 1,
 ) -> str | Exception:
-    from anthropic import Anthropic
-
+    """Get response from Claude API."""
     try:
-        response = Anthropic().messages.create(
+        response = Anthropic(
+            api_key=os.environ["ANTHROPIC_API_KEY"]
+        ).messages.create(
             model=model,
             max_tokens=1024,
             temperature=temperature,
-            system=create_system_message("claude", context),
+            system=create_system_message_content("claude", context),
             messages=[{"role": "user", "content": prompt}],
         )
         return response.content[0].text
