@@ -1,0 +1,6 @@
+__pycache__
+__tools
+.env
+.venv
+.DS_Store
+tests.py
