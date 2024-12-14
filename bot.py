@@ -8,10 +8,8 @@ from telegram import Update
 from telegram.ext import ContextTypes
 from telegramify_markdown import markdownify
 
-from src.message_handler import create_message_from_telegram, Message
-from src.router import get_router_response, RouterResponse
-from src.delegates import get_online_model_response, get_claude_response
-from src.memory import get_new_bot_memory, MemoryState
+from src.message_handler import create_message_from_telegram
+from src.model import get_model_response, MemoryState, get_new_bot_memory
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -22,89 +20,48 @@ memory_dict = Dict.from_name("dan-conversation-state", create_if_missing=True)
 
 async def handle_message(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle incoming messages."""
-    if not update.message or not update.message.text:
+    # Create message object from the update
+    user_message = create_message_from_telegram(update.message)
+    if not user_message or user_message.content.type != "text":  # Only handle text messages for now
         return
 
     chat_id = update.effective_chat.id
-    assistant_messages = []
     
     try:
-        telegram_message_dict = update.message.to_dict()
-        user_message: Message = create_message_from_telegram(telegram_message_dict)
+        # Get existing memory
+        existing_memory_data = None
+        if memory_data := memory_dict.get(chat_id):
+            try:
+                existing_memory_data = MemoryState(**memory_data)
+            except Exception:
+                logging.exception("Error deserializing memory state")
         
-        # When retrieving memory
-        memory_dict_data = memory_dict.get(chat_id)
-        existing_memory_data: MemoryState | None = (
-            MemoryState(**memory_dict_data) if memory_dict_data else None
-        )
-        
-        router_response: RouterResponse = get_router_response(user_message, existing_memory_data)
-        if isinstance(router_response, Exception):
-            logging.error(f"Router error: {str(router_response)}")
+        # Get and send model response
+        if response := get_model_response(user_message, existing_memory_data):
+            if isinstance(response, Exception):
+                raise response
+                
             await update.message.reply_text(
-                "I'm having trouble processing your request. Please try again."
+                markdownify(response),
+                parse_mode="MarkdownV2"
             )
-            return
-            
-        # Send and collect router messages if present
-        if router_response.messages:
-            assistant_messages.extend(router_response.messages)
-            for message in router_response.messages:
-                await update.message.reply_text(
-                    markdownify(message),
-                    parse_mode="MarkdownV2"
-                )
-            
-        # Handle delegation if present
-        if delegation := router_response.delegation:
-            logging.info(f"Delegating to {delegation.delegate_to} with prompt: {delegation.prompt}")
-            try:
-                delegate_fn = {
-                    "claude": get_claude_response,
-                    "online": get_online_model_response,
-                }.get(delegation.delegate_to)
-                if delegate_fn:
-                    delegate_response = delegate_fn(delegation.prompt)
-                    if isinstance(delegate_response, Exception):
-                        logging.error(f"Delegation error: {str(delegate_response)}")
-                        await update.message.reply_text(
-                            "I'm having trouble getting a response. Please try again."
-                        )
-                        return
-                    assistant_messages.append(delegate_response)
-                    await update.message.reply_text(
-                        markdownify(delegate_response),
-                        parse_mode="MarkdownV2"
-                    )
-            except Exception as e:
-                logging.error(f"Delegation error: {str(e)}")
-                await update.message.reply_text(
-                    "I'm having trouble processing your request. Please try again."
-                )
-                return
 
-        # Update conversation memory
-        if assistant_messages:
-            try:
-                new_memory = get_new_bot_memory(
-                    existing_memory_data,
-                    user_message.content,
-                    assistant_messages,
-                )
+            # Update conversation memory
+            if new_memory := get_new_bot_memory(
+                existing_memory_data,
+                user_message.content.text,  # Changed to access text from content
+                [response],
+            ):
                 if isinstance(new_memory, Exception):
-                    logging.error(f"Memory error: {str(new_memory)}")
-                    return
+                    raise new_memory
                     
                 memory_dict[chat_id] = MemoryState(
                     memory_content=new_memory,
                     created_at=datetime.now(timezone.utc)
-                ).model_dump()  # Convert to dict for storage
-            except Exception as e:
-                logging.error(f"Error storing memory: {str(e)}")
-                # Continue execution even if memory storage fails
+                ).model_dump()
                 
-    except Exception as e:
-        logging.error(f"Error processing message: {str(e)}")
+    except Exception:
+        logging.exception("Error processing message")
         await update.message.reply_text(
             "I apologize, but I encountered an error. Please try again later."
         )
