@@ -1,8 +1,6 @@
-pydantic
-modal
 python-dotenv
+pydantic
 python-telegram-bot
 telegramify-markdown
 google-generativeai
-anthropic
-openai
+aiosqlite
