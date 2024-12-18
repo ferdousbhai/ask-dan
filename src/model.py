@@ -1,113 +1,122 @@
 import os
 import logging
-from datetime import datetime, timezone
-from pydantic import BaseModel
+import json
+from typing import Literal
+from PIL import Image
+from io import BytesIO
 import google.generativeai as genai
 from google.generativeai.types import HarmCategory, HarmBlockThreshold
 from telegram import Message
+from src.chat_history import clear_chat_history
+from src.delegates import get_online_response, get_claude_response
 
-class MemoryState(BaseModel):
-    memory_content: str
-    created_at: datetime
 
-# Configure Gemini model
-genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
-
-# Consolidate safety settings and model configuration
-MODEL_CONFIG = {
-    "model_name": "gemini-2.0-flash-exp",
-    "safety_settings": {
-        HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
-        HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
-        HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
-        HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
-    },
-    "generation_config": genai.types.GenerationConfig(
-        max_output_tokens=800,
-        temperature=2.0,
-    )
-}
-
-model = genai.GenerativeModel(MODEL_CONFIG["model_name"])
-
-def create_prompt(message: Message, memory_data: MemoryState | None = None) -> str:
-    """Create a prompt with optional memory context and metadata."""
-    metadata = {
-        "user": f"{message.from_user.first_name} {message.from_user.last_name or ''}" if message.from_user else "",
-        "chat_type": message.chat.type,
-        "time": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M"),
-    }
-    if message.reply_to_message:
-        metadata["reply_to"] = message.reply_to_message.to_dict()
-
-    parts = [
-        "You are a helpful and knowledgeable AI assistant deployed as a Telegram bot. Be direct, clear, and use markdown formatting.",
-    ]
+# LLM interaction
+async def get_model_response(user_message: Message, chat_history: list[dict[str, str]] | None = None, model_name: str = os.getenv("DEFAULT_MODEL"), temperature: float = 2.0, api_key: str = os.getenv("GOOGLE_API_KEY")) -> str | Exception:
+    """Get response using Gemini's chat mode."""
     
-    if memory_data:
-        parts.append(f"Previous context: {memory_data.memory_content}")
+     # Functions for LLM
+    async def start_a_new_conversation() -> bool:
+        # TODO: save conversation to VectorDB
+        return await clear_chat_history(user_message.chat.id)
+
+    async def load_previous_conversation(description: str) -> list[dict[str, str]]:
+        # TODO: Load conversation from VectorDB
+        # return await load_conversation(user_message.chat.id, description)
+        ...
+    
+    async def delegate_to_model(model: Literal["perplexity", "claude"], prompt: str) -> str:
+        delegates = {
+            "perplexity": get_online_response,
+            "claude": get_claude_response
+        }
+        if model not in delegates:
+            raise ValueError(f"Unknown model: {model}")
+        return delegates[model](prompt)
         
-    parts.append(f"Context: {metadata}")
-    parts.append(message.text or message.caption or "")
-    
-    return "\n\n".join(parts)
+    system_instruction = f"""You are a kind, helpful AI assistant named "Dan" deployed on Telegram.
+    You are talking to {user_message.from_user.first_name} {user_message.from_user.last_name or ''} in a {user_message.chat.type} chat.
+    {f"The user is replying to {user_message.reply_to_message.from_user.first_name}'s message: {user_message.reply_to_message.text or user_message.reply_to_message.caption or ''}" if user_message.reply_to_message else ""}
+    - Be direct and clear in your responses
+    - Keep responses concise but informative, never more than 4000 characters
+    - If you're unsure, acknowledge the uncertainty
+    - Use markdown formatting in your responses
 
-async def get_model_response(message: Message, memory_data: MemoryState | None) -> str | Exception:
-    """Get response from Gemini model."""
+    You have access to some tools to help you with your task:
+    - If the conversation topic changes, or the user wants to start a new conversation, use the start_a_new_conversation function to clear the conversation history and start a new one
+    - If you need to reference any previous conversation, use the load_previous_conversation function to load a conversation from VectorDB
+            
+    You can delegate certain types of queries to specialized models:
+    - Use delegate_to_model("perplexity") for:
+        * Current events and real-time information
+        * Complex academic or technical questions
+        * Questions requiring up-to-date knowledge
+    - Use delegate_to_model("claude") for:
+        * Complex coding tasks and code review
+        * Detailed analysis of technical documents
+        * Mathematical problem-solving
+            
+    When delegating:
+    1. Pass a clear, well-formatted prompt to the delegate model
+    2. Return the response with appropriate context
+    """
+
     try:
-        prompt = create_prompt(message, memory_data)
-        result = await model.generate_content_async(
-            prompt,
-            safety_settings=MODEL_CONFIG["safety_settings"],
-            generation_config=MODEL_CONFIG["generation_config"]
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel(
+            model_name=model_name,
+            tools=[start_a_new_conversation, load_previous_conversation, delegate_to_model],
+            system_instruction=system_instruction
         )
-        return result.text
+
+        generation_config = genai.types.GenerationConfig(
+            max_output_tokens=800,
+            temperature=temperature,
+        )
+
+        safety_settings = {
+            HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
+            HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
+            HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
+            HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
+        }
+        
+        chat = model.start_chat(history=chat_history if chat_history else [])
+        
+        prompt_parts = []
+        if user_message.photo:
+            photo = user_message.photo[-1]
+            image = Image.open(BytesIO(await (await photo.get_file()).download_as_bytearray()))
+            prompt_parts.extend([
+                image,
+                user_message.text or user_message.caption or "Please analyze this image and describe what you see."
+            ])
+        else:
+            prompt_parts.append(user_message.text or user_message.caption)
+
+        response = await chat.send_message_async(prompt_parts, generation_config=generation_config, safety_settings=safety_settings)
+
+        # Process function calls
+        while any(part.function_call for part in response.parts):
+            fn = next(part.function_call for part in response.parts if part.function_call)
+            
+            # Execute function based on name
+            function_map = {
+                "start_a_new_conversation": lambda: start_a_new_conversation(),
+                "load_previous_conversation": lambda: load_previous_conversation(fn.args["description"]),
+                "delegate_to_model": lambda: delegate_to_model(model=fn.args["model_name"], prompt=fn.args["prompt"])
+            }
+            result = await function_map[fn.name]()
+            
+            function_response = {
+                "role": "function",
+                "name": fn.name,
+                "content": json.dumps(result)
+            }
+            response = await chat.send_message_async(function_response, generation_config=generation_config, safety_settings=safety_settings)
+
+        return response.text
+        
     except Exception as e:
         logging.exception("Error in Gemini API call")
         return e
-
-async def get_new_bot_memory(
-    memory_data: MemoryState | None,
-    message: Message,
-    assistant_response: str,
-) -> str | Exception:
-    """Maintains a flowing record of the conversation, acting as the bot's memory."""
-    current_time = datetime.now(timezone.utc)
-
-    memory_context = (
-        f"Existing memory as of {memory_data.created_at}: {memory_data.memory_content}\n\n"
-        if memory_data
-        else ""
-    )
-
-    prompt = (
-        "Act as a bot named Dan's memory system. Track and maintain important information about the user "
-        "and the conversation flow, with precise temporal awareness. Your task is to:\n"
-        "1. Preserve ALL user information (preferences, facts, characteristics, etc.)\n"
-        "2. When new user information is revealed, update previous information while noting the change\n"
-        "3. Track time using UTC timestamps:\n"
-        "   - Add a UTC timestamp (YYYY-MM-DD HH:MM) for each piece of information\n"
-        "   - For new information, use the current timestamp\n"
-        "   - Keep existing timestamps for unchanged information\n"
-        "4. For topic changes:\n"
-        "   - Keep a brief summary of previous topics under 'Previous discussions:'\n"
-        "   - Start 'Current discussion:' for the new topic\n\n"
-        f"Current UTC time: {current_time.strftime('%Y-%m-%d %H:%M')}\n"
-        f"{memory_context}"
-        f"New interaction:\n"
-        f"User: {message.text}\n"
-        f"Assistant: {assistant_response}\n\n"
-        "Provide an updated memory state that:\n"
-        "1. Maintains important user information learned so far\n"
-        "2. Updates any contradicting information with latest revelations\n"
-        "3. Uses UTC timestamps (YYYY-MM-DD HH:MM) for all information\n"
-        "4. Compresses older parts while keeping key points\n"
-        "Format: Start with 'User Information:' (if any), then 'Previous discussions:' (if any), followed by 'Current discussion:'"
-    )
-    try:
-        result = await model.generate_content_async(prompt, safety_settings=MODEL_CONFIG["safety_settings"])
-        return result.text
-    except Exception as e:
-        logging.exception("Error generating conversation context")
-        return e
-

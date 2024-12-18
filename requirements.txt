@@ -3,4 +3,7 @@ pydantic
 python-telegram-bot
 telegramify-markdown
 google-generativeai
+openai
+anthropic
 aiosqlite
+pillow
