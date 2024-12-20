@@ -1,1 +1,2 @@
-Add functions to store, load conversations in VectorDB
+Test out chat_history.py
+Add functions to handle memory in memory.py

@@ -10,7 +10,7 @@ from telegramify_markdown import markdownify
 
 load_dotenv()
 
-from src.model import get_model_response
+from src.chat_model import get_chat_model_response
 from src.chat_history import save_chat_history, get_chat_history
 
 logging.basicConfig(
@@ -29,7 +29,7 @@ async def handle_message(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
         existing_chat_history = await get_chat_history(chat_id)
         
         try:
-            assistant_response = await get_model_response(update.message, existing_chat_history)
+            assistant_response = await get_chat_model_response(update.message, existing_chat_history)
             await update.message.reply_chat_action(ChatAction.TYPING)
             await update.message.reply_text(
                 markdownify(assistant_response),

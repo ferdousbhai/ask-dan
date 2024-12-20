@@ -2,8 +2,6 @@ python-dotenv
 pydantic
 python-telegram-bot
 telegramify-markdown
-google-generativeai
-openai
-anthropic
+google-genai
 aiosqlite
 pillow
