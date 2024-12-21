@@ -1,58 +1,79 @@
 import os
 from dotenv import load_dotenv
 import logging
-
 from telegram.ext import Application, MessageHandler, filters, CommandHandler
 from telegram import Update
 from telegram.constants import ChatAction
 from telegram.ext import ContextTypes
 from telegramify_markdown import markdownify
+import asyncio
 
 load_dotenv()
 
-from src.chat_model import get_chat_model_response
-from src.chat_history import save_chat_history, get_chat_history
+from src.model import get_model_response, extract_dan_response
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO
 )
 
-async def handle_message(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
-    # Check for message with either text or photo
+# In-memory mapping of chat history by chat id
+chat_history_by_chat_id = {}
+
+async def show_typing_indicator(chat, stop_event):
+    """Keep showing typing indicator until stop_event is set."""
+    while not stop_event.is_set():
+        await chat.send_chat_action(ChatAction.TYPING)
+        # Chat action expires after 5 seconds, so we refresh it every 4 seconds
+        await asyncio.sleep(4)
+
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not (update.message and (update.message.text or update.message.photo)):
         return
         
     chat_id = update.effective_chat.id
-    
-    try:
-        existing_chat_history = await get_chat_history(chat_id)
-        
-        try:
-            assistant_response = await get_chat_model_response(update.message, existing_chat_history)
-            await update.message.reply_chat_action(ChatAction.TYPING)
-            await update.message.reply_text(
-                markdownify(assistant_response),
-                parse_mode="MarkdownV2"
-            )
+    chat_history = chat_history_by_chat_id.get(chat_id, [])
 
-            # Update chat history
-            updated_history = (existing_chat_history if existing_chat_history else []) + [
-                {"role": "user", "parts": update.message.text or update.message.caption or ""},
-                {"role": "model", "parts": assistant_response}
-            ]
-            await save_chat_history(chat_id, updated_history)
-                
-        except Exception as e:
-            logging.error(f"Error getting model response: {str(e)}")
-            await update.message.reply_text(
-                "I apologize, but I encountered an error processing your request. Please try again later."
-            )
+    # Create an event to control the typing indicator
+    typing_stop_event = asyncio.Event()
+    
+    # Start typing indicator in the background
+    typing_task = asyncio.create_task(
+        show_typing_indicator(update.effective_chat, typing_stop_event)
+    )
+
+    try:
+        updated_chat_messages = await get_model_response(
+            update.message, 
+            chat_history=chat_history
+        )
+        if isinstance(updated_chat_messages, Exception):
+            raise updated_chat_messages
+        
+        # Stop typing indicator
+        typing_stop_event.set()
+        await typing_task
+
+        final_assistant_text = updated_chat_messages[-1]['content'][0]['text']
+        
+        # Extract and send the response to user
+        response_text = extract_dan_response(final_assistant_text, "DAN_RESPONSE")
+        await update.message.reply_text(
+            markdownify(response_text),
+            parse_mode="MarkdownV2"
+        )
+
+        chat_history_by_chat_id[chat_id] = updated_chat_messages
             
     except Exception as e:
-        logging.exception("Error accessing chat history")
+        # Stop typing indicator in case of error
+        typing_stop_event.set()
+        await typing_task
+        
+        logging.error(f"Error getting model response: {str(e)}")
+        logging.exception("Full traceback:")
         await update.message.reply_text(
-            "I apologize, but I encountered an error accessing the chat history. Please try again later."
+            "I apologize, but I encountered an error processing your request. Please try again later."
         )
 
 async def start_command(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
@@ -66,7 +87,7 @@ if __name__ == "__main__":
     
     # Add command handlers
     application.add_handler(CommandHandler("start", start_command))
-    
+
     # Add message handler
     application.add_handler(MessageHandler(
         (filters.TEXT | filters.PHOTO) & ~filters.COMMAND, 

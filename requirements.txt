@@ -1,7 +1,9 @@
 python-dotenv
+httpx
 pydantic
+anthropic
+openai
+firecrawl-py
 python-telegram-bot
 telegramify-markdown
-google-genai
-aiosqlite
-pillow
+cachetools
