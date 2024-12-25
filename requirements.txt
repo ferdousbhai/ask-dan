@@ -7,3 +7,4 @@ firecrawl-py
 python-telegram-bot
 telegramify-markdown
 cachetools
+psycopg2-binary

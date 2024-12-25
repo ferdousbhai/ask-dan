@@ -30,7 +30,7 @@ async def get_news(
                 timeout=10.0
             )
             response.raise_for_status()
-            
+
             if results := response.json().get("results"):
                 return [
                     NewsItem(
@@ -41,36 +41,37 @@ async def get_news(
                     ) for r in results
                 ]
             return []
-            
+
     except (httpx.TimeoutException, httpx.HTTPError, Exception) as e:
         logging.error(f"Error fetching news: {e}")
         return None
 
-def extract_content(markdown: str) -> str:
-    from openai import OpenAI
-    
-    return OpenAI().chat.completions.create(
+async def extract_content(markdown: str) -> str:
+    from openai import AsyncOpenAI
+
+    response = await AsyncOpenAI().chat.completions.create(
         model="gpt-4o-mini",
         messages=[{"role": "user", "content": f"Extract the main article from the following markdown. Do not include any headers, footers, or other irrelevant elements: \n\n{markdown}"}],
-    ).choices[0].message.content
+    )
+    return response.choices[0].message.content
 
 @ttl_cache(ttl=60*24*60*60, maxsize=100) # 1 day
 async def scrape_url(url: str) -> str | None:
     from firecrawl import FirecrawlApp
-    
+
     try:
         result = FirecrawlApp(api_key=os.getenv("FIRECRAWL_API_KEY")).scrape_url(
             url, params={'formats': ['markdown']}
         )
-        
-        if 'metadata' not in result or 'markdown' not in result:
+
+        if 'dmetadata' not in result or 'markdown' not in result:
             raise ValueError(f"Failed to scrape website: {result}")
-            
-        return extract_content(result['markdown'])
+
+        return await extract_content(result['markdown'])
     except Exception as e:
         logging.error(f"Error scraping website: {e}")
         return None
-    
+
 
 if __name__ == "__main__":
     url = "https://www.tesla.com/en_ca"

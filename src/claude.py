@@ -11,23 +11,28 @@ with open('src/tools.json', 'r') as f:
 
 
 def extract_dan_response(text: str, tag: str = "DAN_RESPONSE") -> str:
-    """Extract the text content from within DAN_RESPONSE tags."""
+    """Extract the text content from within DAN_RESPONSE tags.
+    If tags are not found, return the original text with some cleanup."""
     match = re.search(f'<{tag}>(.*?)</{tag}>', text, re.DOTALL)
-    if not match:
-        raise ValueError(f"No {tag} tags found in text")
-    return match.group(1)
+    if match:
+        return match.group(1).strip()
+
+    # Fallback: If no tags found, try to clean up the text
+    # Remove any other XML-style tags that might be present
+    cleaned_text = re.sub(r'<[^>]+>', '', text)
+    return cleaned_text.strip()
 
 
 async def get_model_response(
-    telegram_message: TelegramMessage, 
+    telegram_message: TelegramMessage,
     chat_history: list[dict] | None = None,
-    model_name: str = "claude-3-opus-latest", 
-    temperature: float = 1, 
+    model_name: str = "claude-3-5-sonnet-latest",
+    temperature: float = 1,
 ) -> list[dict] | Exception:
     from anthropic import AsyncAnthropic
 
     user_message_content_blocks = []
-    
+
     if telegram_message.photo:
         photo = telegram_message.photo[-1]
         image_bytes = await (await photo.get_file()).download_as_bytearray()
@@ -39,18 +44,18 @@ async def get_model_response(
                 "data": base64.b64encode(image_bytes).decode('utf-8'),
             }
         })
-    
+
     message_text = telegram_message.text or telegram_message.caption
     if message_text:
         user_message_content_blocks.append({
             "type": "text",
             "text": message_text
         })
-    
+
     try:
         new_conversation_turns = []
         user_message = {"role": "user", "content": user_message_content_blocks}
-        
+
         while True:
             response = await AsyncAnthropic().messages.create(
                 model=model_name,
@@ -90,7 +95,7 @@ async def get_model_response(
             tool_calls = [block for block in serializable_content if block["type"] == "tool_use"]
             logging.info(f"Found {len(tool_calls)} tool calls to process")
             tool_result_content = []
-            
+
             for tool_call in tool_calls:
                 logging.info(f"Processing tool call: {tool_call['name']} with input: {tool_call['input']}")
                 try:
@@ -117,7 +122,7 @@ async def get_model_response(
                 except Exception as e:
                     logging.error(f"Error processing tool {tool_call['name']}: {str(e)}")
                     tool_result_content.append({
-                        "type": "tool_result", 
+                        "type": "tool_result",
                         "tool_use_id": tool_call["id"],
                         "content": str(e),
                         "is_error": True
@@ -131,7 +136,7 @@ async def get_model_response(
                 })
 
         # Return the complete conversation including the final response
-        return (chat_history or []) + [user_message] + new_conversation_turns 
+        return (chat_history or []) + [user_message] + new_conversation_turns
 
     except Exception as e:
         logging.exception("Error in Anthropic API call")
@@ -146,7 +151,7 @@ if __name__ == "__main__":
     load_dotenv()
 
     logging.basicConfig(level=logging.INFO)
-    
+
     mock_user = User(id=1, is_bot=False, first_name="Test", last_name="User")
     mock_chat = Chat(id=1, type="private")
     mock_message = TelegramMessage(
@@ -156,7 +161,7 @@ if __name__ == "__main__":
         from_user=mock_user,
         text="Hello, what's the latest with google?"
     )
-    
+
     messages = asyncio.run(get_model_response(mock_message))
     for message in messages:
         for content_block in message['content']:
