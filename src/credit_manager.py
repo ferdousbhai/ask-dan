@@ -15,7 +15,16 @@ def get_db_connection():
     if not is_production():
         return None
 
-    return psycopg2.connect(os.getenv('DATABASE_URL'))
+    # Add error handling and connection string formatting
+    db_url = os.getenv('DATABASE_URL')
+    if not db_url:
+        raise ValueError("DATABASE_URL environment variable is not set")
+
+    # Railway provides PostgreSQL URLs starting with postgres://, but psycopg2 requires postgresql://
+    if db_url.startswith('postgres://'):
+        db_url = db_url.replace('postgres://', 'postgresql://', 1)
+
+    return psycopg2.connect(db_url)
 
 def init_db():
     """Initialize the database table if it doesn't exist."""
@@ -63,8 +72,8 @@ def save_credits(credits: CreditInfo) -> None:
                 cur.execute("""
                     INSERT INTO user_credits (chat_id, username, calls_remaining, last_reset)
                     VALUES (%s, %s, %s, %s)
-                    ON CONFLICT (chat_id) 
-                    DO UPDATE SET 
+                    ON CONFLICT (chat_id)
+                    DO UPDATE SET
                         username = EXCLUDED.username,
                         calls_remaining = EXCLUDED.calls_remaining,
                         last_reset = EXCLUDED.last_reset
