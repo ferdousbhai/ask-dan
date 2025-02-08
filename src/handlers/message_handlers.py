@@ -49,10 +49,14 @@ async def handle_message(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
         # Remove think tags and contents in think tags if present
         response_text = re.sub(r'<think>[\s\S]*?</think>', '', response_text)
 
-        await update.message.reply_text(
-            markdownify(response_text),
-            parse_mode="MarkdownV2"
-        )
+        # Split response into paragraphs and send them separately
+        paragraphs = [p.strip() for p in response_text.split('\n\n') if p.strip()]
+        for paragraph in paragraphs:
+            if paragraph:
+                await update.message.reply_text(
+                    markdownify(paragraph),
+                    parse_mode="MarkdownV2"
+                )
 
     except Exception as e:
         logger.error(f"Error in message handler: {str(e)}", exc_info=True)

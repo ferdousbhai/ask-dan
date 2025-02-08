@@ -41,6 +41,7 @@ async def chat_with_model(
     system_prompt: str | None = None,
     chat_history: list[dict] | None = None,
     model_name: str = "claude-3-5-sonnet-latest",
+    max_tokens: int = 4096,
     temperature: float = 1,
 ) -> list[dict] | Exception:
     """Chat with the model and return the full conversation history, handling any tool calls."""
@@ -55,7 +56,7 @@ async def chat_with_model(
         while True:
             message_params = {
                 "model": model_name,
-                "max_tokens": 4096,
+                "max_tokens": max_tokens,
                 "temperature": temperature,
                 "messages": chat_history + [user_message] + new_conversation_turns,
                 "tools": tools,
