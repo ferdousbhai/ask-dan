@@ -1,10 +1,10 @@
-python-dotenv
-httpx
-pydantic
 anthropic
-openai
+cachetools
 firecrawl-py
+httpx
+openai
+psycopg2-binary
+pydantic
+python-dotenv
 python-telegram-bot
 telegramify-markdown
-cachetools
-psycopg2-binary

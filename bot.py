@@ -1,176 +1,178 @@
 import os
-from dotenv import load_dotenv
 import logging
-from telegram.ext import Application, MessageHandler, filters, CommandHandler
-from telegram import Update
-from telegram.constants import ChatAction
-from telegram.ext import ContextTypes
-from telegramify_markdown import markdownify
 import asyncio
-
-load_dotenv()
-
-from src.claude import get_model_response, extract_dan_response
-from src.credit_manager import (
-    check_credits, deduct_credit, get_user_credits,
-    get_all_credits, set_user_credits, reset_all_credits,
-    is_admin
+import re
+import base64
+from dotenv import load_dotenv
+from telegram import Update, Chat, Message as TelegramMessage
+from telegram.ext import (
+    Application,
+    MessageHandler,
+    CommandHandler,
+    ContextTypes,
+    filters,
+    CallbackQueryHandler,
 )
+from telegram.constants import ChatAction
+from telegramify_markdown import markdownify
 
+from model.claude import chat_with_model
+from model.prompt import get_system_prompt
+
+
+# Initialize environment and logging
+load_dotenv()
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO
 )
+logger = logging.getLogger(__name__)
 
-# In-memory mapping of chat history by chat id
-chat_history_by_chat_id = {}
+# Type definitions
+ChatHistory = list[dict]
+ChatHistoryMap = dict[int, ChatHistory]
 
-async def show_typing_indicator(chat, stop_event):
-    """Keep showing typing indicator until stop_event is set."""
+# In-memory chat history storage
+chat_history_by_chat_id: ChatHistoryMap = {}
+
+async def show_typing_indicator(chat: Chat, stop_event: asyncio.Event) -> None:
+    """
+    Show and maintain a typing indicator until the stop event is set.
+
+    Args:
+        chat: The Telegram chat to show the indicator in
+        stop_event: Event to control when to stop showing the indicator
+    """
     while not stop_event.is_set():
         await chat.send_chat_action(ChatAction.TYPING)
-        # Chat action expires after 5 seconds, so we refresh it every 4 seconds
+        # Chat action expires after 5 seconds, so refresh every 4 seconds
         await asyncio.sleep(4)
 
+async def create_user_message(telegram_message: TelegramMessage) -> dict:
+    """Create a complete user message from a Telegram message, handling both images and text.
+
+    Args:
+        telegram_message: The Telegram message to process
+
+    Returns:
+        A complete user message in Claude's format with role and content
+    """
+    content_blocks = []
+
+    # Add image if it exists
+    if telegram_message.photo:
+        photo = telegram_message.photo[-1]
+        image_bytes = await (await photo.get_file()).download_as_bytearray()
+        content_blocks.append({
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": "image/jpeg",
+                "data": base64.b64encode(image_bytes).decode('utf-8'),
+            }
+        })
+
+    # Add text if it exists
+    if message_text := telegram_message.text or telegram_message.caption:
+        content_blocks.append({
+            "type": "text",
+            "text": message_text
+        })
+
+    return {"role": "user", "content": content_blocks}
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not (update.message and (update.message.text or update.message.photo)):
+    """
+    Handle incoming messages from users.
+
+    Args:
+        update: The incoming update from Telegram
+        context: The context for this update
+    """
+    if not update.message or not (update.message.text or update.message.photo):
         return
 
-    chat_id = str(update.effective_chat.id)
-    username = update.effective_user.username
-
-    # Check credits before processing
-    has_credits, message = check_credits(chat_id, username)
-    if not has_credits:
-        await update.message.reply_text(message)
-        return
-
+    chat_id = update.effective_chat.id
     chat_history = chat_history_by_chat_id.get(chat_id, [])
 
-    # Create an event to control the typing indicator
-    typing_stop_event = asyncio.Event()
-
-    # Start typing indicator in the background
+    # Setup typing indicator
     typing_task = asyncio.create_task(
-        show_typing_indicator(update.effective_chat, typing_stop_event)
+        show_typing_indicator(update.effective_chat, typing_event := asyncio.Event())
     )
 
     try:
-        updated_chat_messages = await get_model_response(
-            update.message,
-            chat_history=chat_history
+        # Get model response
+        user_message = await create_user_message(update.message)
+        model_response: list[dict] | Exception = await chat_with_model(
+            user_message=user_message,
+            system_prompt=get_system_prompt(update.message),
+            chat_history=chat_history,
+            telegram_update=update,
+            telegram_context=context
         )
-        if isinstance(updated_chat_messages, Exception):
-            raise updated_chat_messages
+        if isinstance(model_response, Exception):
+            raise model_response
 
-        # Deduct credit after successful API call
-        deduct_credit(chat_id, username)
+        # Get the final assistant text
+        final_assistant_text = model_response[-1]['content'][0]['text']
+        # Remove all thinking-related text and tags
+        response_text = re.sub(r'<think>[\s\S]*?</think>', '', final_assistant_text).strip()
 
-        # Stop typing indicator
-        typing_stop_event.set()
-        await typing_task
-
-        final_assistant_text = updated_chat_messages[-1]['content'][0]['text']
-
-        # Extract and send the response to user
-        try:
-            response_text = extract_dan_response(final_assistant_text, "DAN_RESPONSE")
-            if "<DAN_RESPONSE>" not in final_assistant_text:
-                logging.warning(f"Response missing DAN_RESPONSE tags: {final_assistant_text[:100]}...")
-        except Exception as e:
-            logging.error(f"Error extracting response: {str(e)}")
-            response_text = final_assistant_text
-
+        # Send response
         await update.message.reply_text(
             markdownify(response_text),
             parse_mode="MarkdownV2"
         )
 
-        chat_history_by_chat_id[chat_id] = updated_chat_messages
+        # Update chat history
+        chat_history_by_chat_id[chat_id] = model_response
 
     except Exception as e:
-        # Stop typing indicator in case of error
-        typing_stop_event.set()
+        logger.error(f"Error getting model response: {str(e)}")
+        logger.exception("Full traceback:")
+        await update.message.reply_text(
+            "I apologize, but I encountered an error processing your request. Please report this to the developer @ferdousbhai or try again later."
+        )
+    finally:
+        # Always ensure typing indicator is stopped
+        typing_event.set()
         await typing_task
 
-        logging.error(f"Error getting model response: {str(e)}")
-        logging.exception("Full traceback:")
-        await update.message.reply_text(
-            "I apologize, but I encountered an error processing your request. Please try again later."
-        )
-
 async def start_command(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle the /start command."""
     await update.message.reply_text("👋")
 
-async def credits_command(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle /credits command."""
-    chat_id = str(update.effective_chat.id)
-    credits_info = get_user_credits(chat_id)
-    if credits_info:
-        await update.message.reply_text(
-            f"You have {credits_info['calls_remaining']} calls remaining this month."
-        )
-    else:
-        await update.message.reply_text("No credit information found.")
+async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle button presses."""
+    query = update.callback_query
+    await query.answer()  # Acknowledge the button press
 
-async def credits_all_command(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle /credits_all command (admin only)."""
-    if not is_admin(update.effective_user.username):
-        await update.message.reply_text("This command is only available to admins.")
-        return
+    if query.data.startswith("show_research_"):
+        message_id = query.data.split("_")[2]
+        research_result = context.user_data.get(f"research_{message_id}")
+        if research_result:
+            await query.message.reply_text(research_result)
+            # Optionally, remove the button after showing the result
+            await query.message.edit_reply_markup(reply_markup=None)
 
-    credits = get_all_credits()
-    message = "Credits for all users:\n\n"
-    for chat_id, info in credits.items():
-        message += f"Chat ID: {chat_id}\n"
-        message += f"Username: {info['username']}\n"
-        message += f"Calls remaining: {info['calls_remaining']}\n"
-        message += f"Last reset: {info['last_reset']}\n\n"
+def main() -> None:
+    """Initialize and run the bot."""
+    bot_token = os.environ.get("TELEGRAM_BOT_TOKEN")
+    if not bot_token:
+        raise ValueError("TELEGRAM_BOT_TOKEN environment variable is not set")
 
-    await update.message.reply_text(message)
-
-async def set_credits_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle /set_credits command (admin only)."""
-    if not is_admin(update.effective_user.username):
-        await update.message.reply_text("This command is only available to admins.")
-        return
-
-    try:
-        chat_id, amount = context.args
-        set_user_credits(chat_id, int(amount))
-        await update.message.reply_text(f"Credits for {chat_id} set to {amount}")
-    except (ValueError, IndexError):
-        await update.message.reply_text("Usage: /set_credits <chat_id> <amount>")
-
-async def reset_credits_command(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle /reset_credits command (admin only)."""
-    if not is_admin(update.effective_user.username):
-        await update.message.reply_text("This command is only available to admins.")
-        return
-
-    reset_all_credits()
-    await update.message.reply_text("All credits have been reset to 10.")
-
-if __name__ == "__main__":
-    bot_token = os.environ["TELEGRAM_BOT_TOKEN"]
-
-    # Create application
     application = Application.builder().token(bot_token).build()
 
-    # Add command handlers
+    # Add handlers
     application.add_handler(CommandHandler("start", start_command))
-
-    # Add message handler
     application.add_handler(MessageHandler(
         (filters.TEXT | filters.PHOTO) & ~filters.COMMAND,
         handle_message
     ))
-
-    # Add credit-related command handlers
-    application.add_handler(CommandHandler("credits", credits_command))
-    application.add_handler(CommandHandler("credits_all", credits_all_command))
-    application.add_handler(CommandHandler("set_credits", set_credits_command))
-    application.add_handler(CommandHandler("reset_credits", reset_credits_command))
+    application.add_handler(CallbackQueryHandler(handle_button))
 
     # Start the bot
     application.run_polling(allowed_updates=Update.ALL_TYPES)
+
+if __name__ == "__main__":
+    main()
