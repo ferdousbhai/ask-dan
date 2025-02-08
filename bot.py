@@ -151,9 +151,11 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         message_id = query.data.split("_")[2]
         research_result = context.user_data.get(f"research_{message_id}")
         if research_result:
-            await query.message.reply_text(research_result)
-            # Optionally, remove the button after showing the result
-            await query.message.edit_reply_markup(reply_markup=None)
+            # Edit the original message instead of sending a new one
+            await query.message.edit_text(
+                text=markdownify(research_result),
+                parse_mode='MarkdownV2'
+            )
 
 def main() -> None:
     """Initialize and run the bot."""

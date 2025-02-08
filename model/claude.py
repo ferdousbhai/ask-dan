@@ -38,7 +38,7 @@ async def handle_tool_call(tool_call: dict, telegram_update=None, telegram_conte
         return result, is_error
 
     if tool_name == ToolName.ONLINE_RESEARCH:
-        await send_message("🔍 Researching online ⏳")
+        message = await send_message("🔍 Researching online ⏳")
         result = await get_online_research(tool_call["input"]["question"])
         if isinstance(result, Exception):
             is_error = True
@@ -51,9 +51,9 @@ async def handle_tool_call(tool_call: dict, telegram_update=None, telegram_conte
             ]]
             reply_markup = InlineKeyboardMarkup(keyboard)
             # Store the research result in context.user_data for later retrieval
-            # Add italic markdown formatting to the result
-            telegram_context.user_data[f"research_{telegram_update.message.message_id}"] = f"_{result}_"
-            await telegram_update.message.reply_text(
+            telegram_context.user_data[f"research_{telegram_update.message.message_id}"] = result
+            # Edit the original "researching" message instead of sending a new one
+            await message.edit_text(
                 "✅ Research completed. See details?",
                 reply_markup=reply_markup
             )
