@@ -29,7 +29,7 @@ async def handle_tool_call(tool_call: dict, telegram_update=None, telegram_conte
             await telegram_update.message.reply_text(message)
 
     if tool_name == ToolName.SCRAPE_URL:
-        await send_message("🌐 Scraping URL...")
+        await send_message("🌐 Scraping URL ⏳")
         result = await scrape_url(tool_call["input"]["url"])
         if isinstance(result, Exception):
             is_error = True
@@ -38,7 +38,7 @@ async def handle_tool_call(tool_call: dict, telegram_update=None, telegram_conte
         return result, is_error
 
     if tool_name == ToolName.ONLINE_RESEARCH:
-        await send_message("🔍 Researching online...")
+        await send_message("🔍 Researching online ⏳")
         result = await get_online_research(tool_call["input"]["question"])
         if isinstance(result, Exception):
             is_error = True
@@ -53,7 +53,7 @@ async def handle_tool_call(tool_call: dict, telegram_update=None, telegram_conte
             # Store the research result in context.user_data for later retrieval
             telegram_context.user_data[f"research_{telegram_update.message.message_id}"] = result
             await telegram_update.message.reply_text(
-                "Research completed. Click below to see the details:",
+                "✅ Research completed. See details?",
                 reply_markup=reply_markup
             )
         return result, is_error
