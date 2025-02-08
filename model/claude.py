@@ -51,7 +51,8 @@ async def handle_tool_call(tool_call: dict, telegram_update=None, telegram_conte
             ]]
             reply_markup = InlineKeyboardMarkup(keyboard)
             # Store the research result in context.user_data for later retrieval
-            telegram_context.user_data[f"research_{telegram_update.message.message_id}"] = result
+            # Add italic markdown formatting to the result
+            telegram_context.user_data[f"research_{telegram_update.message.message_id}"] = f"_{result}_"
             await telegram_update.message.reply_text(
                 "✅ Research completed. See details?",
                 reply_markup=reply_markup

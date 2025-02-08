@@ -31,13 +31,16 @@ async def get_online_research(question: str, model="sonar-reasoning-pro") -> str
                 end_idx = accumulated_text.find('</think>')
                 thought = accumulated_text[start_idx:end_idx].strip()
 
+                result = ""
                 if response.citations:
-                    thought += "\n\nCitations:\n" + "\n".join(
+                    result += "Search results:\n" + "\n".join(
                         f"{i+1}) {citation}"
                         for i, citation in enumerate(response.citations)
                     )
+                    result += "\n\n"
 
-                return thought
+                result += thought
+                return result
 
     return Exception("No think tag found!")
 
