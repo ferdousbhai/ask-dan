@@ -1,14 +1,6 @@
 import os
 from cachetools.func import ttl_cache
 
-async def extract_content(markdown: str) -> str:
-    from openai import AsyncOpenAI
-    response = await AsyncOpenAI().chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[{"role": "user", "content": f"Extract the main article from the following markdown. Do not include any headers, footers, or other irrelevant elements: \n\n{markdown}"}],
-    )
-    return response.choices[0].message.content
-
 @ttl_cache(ttl=60*24*60*60, maxsize=100) # 1 day
 async def scrape_url(url: str) -> str | Exception:
     from firecrawl import FirecrawlApp
@@ -20,15 +12,15 @@ async def scrape_url(url: str) -> str | Exception:
 
         # Check if result is a dict and has markdown content
         if not isinstance(result, dict):
-            raise ValueError(f"Expected dict result, got {type(result)}")
+            return ValueError(f"Expected dict result, got {type(result)}")
 
         if 'markdown' not in result:
-            raise ValueError("No markdown content found in scraped result")
+            return ValueError("No markdown content found in scraped result")
 
-        return await extract_content(result['markdown'])
+        return result['markdown']
 
     except Exception as e:
-        raise e
+        return e  # Return the exception instead of raising it
 
 
 if __name__ == "__main__":

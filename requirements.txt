@@ -1,10 +1,9 @@
-anthropic
 cachetools
-firecrawl-py
 httpx
-openai
-psycopg2-binary
 pydantic
 python-dotenv
 python-telegram-bot
 telegramify-markdown
+openai
+google-genai
+firecrawl-py
