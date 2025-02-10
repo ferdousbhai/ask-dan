@@ -20,15 +20,4 @@ async def scrape_url(url: str) -> str | Exception:
         return result['markdown']
 
     except Exception as e:
-        return e  # Return the exception instead of raising it
-
-
-if __name__ == "__main__":
-    import asyncio
-    from dotenv import load_dotenv
-
-    load_dotenv()
-
-    url = "https://www.tesla.com/en_ca"
-    content = asyncio.run(scrape_url(url))
-    print(content)
+        return e

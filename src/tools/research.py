@@ -32,15 +32,3 @@ async def get_online_research(question: str, model="sonar-reasoning-pro") -> str
         return Exception("No think tag found in response")
     except Exception as e:
         return e
-
-
-if __name__ == "__main__":
-    import asyncio
-    from dotenv import load_dotenv
-
-    load_dotenv()
-
-    question = "What are the most significant current developments in American politics?"
-    print(f"Starting online research for question: {question}")
-    response = asyncio.run(get_online_research(question))
-    print(response)

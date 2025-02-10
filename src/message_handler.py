@@ -38,7 +38,7 @@ def create_chat(chat_id: int, system_instruction: str | None = None, temperature
 async def handle_message(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle incoming messages from users."""
     message = update.message
-    if not message or not (message.text or message.photo): #TODO: Add support for photos
+    if not message or not (message.text or message.photo):
         return
 
     chat_id = update.effective_chat.id
@@ -46,10 +46,25 @@ async def handle_message(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
     typing_task = asyncio.create_task(show_typing_indicator(update.effective_chat, stop_typing_event := asyncio.Event()))
 
     try:
-        # Send initial message to the model
-        response = await chat.send_message(update.message.text)
+        # Process image if present
+        contents = []
+        if message.photo:
+            # Get the largest photo (last in array)
+            photo = message.photo[-1]
+            photo_file = await photo.get_file()
+            photo_bytes = await photo_file.download_as_bytearray()
 
-        # Process function calls until none remain
+            # Create image part
+            contents.append(types.Part.from_image(photo_bytes))
+
+        # Add text content if present
+        if message.text or message.caption:
+            contents.append(message.text or message.caption)
+
+        # Send message to the model
+        response = await chat.send_message(contents)
+
+        # Sequentially process function calls until none remain
         while response.function_calls:
             function_call = response.function_calls[0]
             function_name = function_call.name
