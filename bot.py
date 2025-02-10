@@ -10,7 +10,6 @@ from telegram.ext import (
 from telegram import Update
 
 # Initialize environment and logging
-os.environ.clear()
 load_dotenv()
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
