@@ -1,23 +1,23 @@
 from datetime import datetime
 from telegram import Message as TelegramMessage
 
-def get_system_prompt(telegram_message: TelegramMessage) -> str:
-    first_and_last_name = telegram_message.from_user.first_name
-    if telegram_message.from_user.last_name:
-        first_and_last_name += f" {telegram_message.from_user.last_name}"
+def get_system_prompt(message: TelegramMessage) -> str:
+    first_and_last_name = message.from_user.first_name
+    if message.from_user.last_name:
+        first_and_last_name += f" {message.from_user.last_name}"
 
     username_context = (
-        f"\nThe username of the user is @{telegram_message.from_user.username}"
-        if telegram_message.from_user.username
+        f"\nThe username of the user is @{message.from_user.username}"
+        if message.from_user.username
         else ""
     )
 
     reply_context = ""
-    if telegram_message.reply_to_message:
-        reply_name = telegram_message.reply_to_message.from_user.first_name
+    if message.reply_to_message:
+        reply_name = message.reply_to_message.from_user.first_name
         reply_text = (
-            telegram_message.reply_to_message.text
-            or telegram_message.reply_to_message.caption
+            message.reply_to_message.text
+            or message.reply_to_message.caption
             or ""
         )
         reply_context = f"\nThe user is replying to {reply_name}'s message: {reply_text}"
@@ -45,7 +45,7 @@ def get_system_prompt(telegram_message: TelegramMessage) -> str:
     - URL analysis: Use scrape_url only when specifically discussing a given webpage
     - Start a new conversation when switching to a significantly different topic
 
-    You are talking to {first_and_last_name} in a {telegram_message.chat.type} chat.{username_context}{reply_context}
+    You are talking to {first_and_last_name} in a {message.chat.type} chat.{username_context}{reply_context}
 
     You can include your internal thought process using <think> tags, but your actual response should be provided directly without any tags, using markdown formatting when appropriate.
 
