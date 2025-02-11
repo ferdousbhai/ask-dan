@@ -10,7 +10,7 @@ from .chat import get_chat, create_chat
 from .tools.conversation import start_a_new_conversation
 from .tools.research import get_online_research
 from .tools.url import scrape_url
-from .tools.location import get_user_location, pending_location_requests, handle_location
+from .location_handler import get_user_location, pending_location_requests
 from .system_prompt import get_system_prompt
 from .utils import show_typing_indicator, split_long_message
 from typing import Final
@@ -175,18 +175,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     message = update.message
     if not message:
         return
-    
+
     chat_id = update.effective_chat.id
-    
-    # If this is a location message and we have a pending request, let the location handler deal with it
-    if message.location and chat_id in pending_location_requests:
-        await handle_location(update, context)
+
+    # Skip location messages as they're handled by location_handler
+    if message.location:
         return
-    
-    # Store current update for location requests
-    pending_location_requests["chat_id"] = chat_id
-    pending_location_requests["update"] = update
-    
+
     chat: AsyncChat = get_chat(chat_id) or create_chat(chat_id, get_system_prompt(message))
     typing_task = asyncio.create_task(show_typing_indicator(update.effective_chat, stop_typing_event := asyncio.Event()))
 
@@ -202,10 +197,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         contents = await create_message_contents(message)
         if not contents:  # Skip empty messages
             return
-            
+
         response = await chat.send_message(contents)
 
-        # Sequentially process function calls
+        # Process function calls one at a time
         while response.function_calls:
             function_call = response.function_calls[0]
             function_name = function_call.name
@@ -215,7 +210,22 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             if not handler:
                 raise ValueError(f"Unknown function: {function_name}")
 
+            # Handle location requests specially
+            if function_name == "get_user_location":
+                logger.info(f"Processing location request for chat_id: {chat_id}")
+                # Store current context for the location request
+                pending_location_requests["chat_id"] = chat_id
+                pending_location_requests["update"] = update
+
             result = await handler(**function_args) if asyncio.iscoroutinefunction(handler) else handler(**function_args)
+
+            if result["response"]["error"]:
+                await update.message.reply_text(
+                    result["response"]["error"].replace(".", "\\."),  # Escape periods
+                    parse_mode="MarkdownV2"
+                )
+                return
+
             response = await chat.send_message(
                 types.Part.from_function_response(**result)
             )
@@ -227,6 +237,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         # Split and send message chunks
         chunks = split_long_message(markdownify(response_text))
         for chunk in chunks:
+            # Escape periods in numbers but preserve markdown
+            chunk = re.sub(r'(\d+)\.(\d+)', r'\1\\\.\2', chunk)
             await update.message.reply_text(
                 chunk,
                 parse_mode="MarkdownV2"
@@ -234,7 +246,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     except Exception as e:
         logger.error(f"Error in message handling: {str(e)}", exc_info=True)
-        await update.message.reply_text(f"Sorry, I encountered an error 💀: {str(e)}")
+        await update.message.reply_text(
+            f"Sorry, I encountered an error: {str(e)}",
+            parse_mode=None
+        )
     finally:
         stop_typing_event.set()
         await typing_task

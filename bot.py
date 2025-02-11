@@ -9,6 +9,7 @@ from telegram.ext import (
 )
 from telegram import Update
 
+
 # Initialize environment and logging
 load_dotenv()
 logging.basicConfig(
@@ -20,7 +21,7 @@ def main() -> None:
     """Initialize and run the bot."""
     from src.command_handlers import start_command
     from src.message_handler import handle_message
-    from src.tools.location import handle_location
+    from src.location_handler import handle_location
 
     bot_token = os.environ.get("TELEGRAM_BOT_TOKEN")
     if not bot_token:
@@ -40,17 +41,17 @@ def main() -> None:
         filters.Document.MimeType("text/csv")  # CSV files
     )
 
-    # Add message handler with all supported types
-    application.add_handler(MessageHandler(
-        (filters.TEXT | filters.PHOTO | filters.VIDEO | filters.VOICE |
-         filters.AUDIO | document_filter | filters.LOCATION) & ~filters.COMMAND,
-        handle_message
-    ))
-
-    # Add location handler
+    # Add dedicated location handler
     application.add_handler(MessageHandler(
         filters.LOCATION,
         handle_location
+    ))
+
+    # Modify general message handler to exclude location messages
+    application.add_handler(MessageHandler(
+        (filters.TEXT | filters.PHOTO | filters.VIDEO | filters.VOICE |
+         filters.AUDIO | document_filter) & ~filters.COMMAND,
+        handle_message
     ))
 
     # Start the bot
