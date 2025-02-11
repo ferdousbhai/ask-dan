@@ -1,7 +1,8 @@
 import os
 import re
+from .schema import create_function_response
 
-async def get_online_research(question: str, model="sonar-reasoning-pro") -> str | Exception:
+async def get_online_research(question: str, model="sonar-reasoning-pro") -> dict:
     from openai import AsyncOpenAI
 
     try:
@@ -27,8 +28,10 @@ async def get_online_research(question: str, model="sonar-reasoning-pro") -> str
                 if response.citations:
                     sections.append("# Search results\n" + "\n".join(f"{i+1}) {c}" for i, c in enumerate(response.citations)))
                 sections.append("# Thoughts\n" + match.group(1).strip())
-                return "\n\n".join(sections)
+                return create_function_response(result="\n\n".join(sections))
 
-        return Exception("No think tag found in response")
+        return create_function_response(
+            error=ValueError("No think tag found in response")
+        )
     except Exception as e:
-        return e
+        return create_function_response(error=e)

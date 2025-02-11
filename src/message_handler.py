@@ -1,27 +1,21 @@
 import asyncio
 import logging
-import os
 import re
-from google import genai
 from google.genai import types
 from google.genai.chats import AsyncChat
 from telegram import Update, Message as TelegramMessage
 from telegram.ext import ContextTypes
 from telegramify_markdown import markdownify
-from src.safety import safety_settings
-from src.tools.schema import tools
-from src.tools.url import scrape_url
-from src.tools.research import get_online_research
-from src.system_prompt import get_system_prompt
-from src.utils import show_typing_indicator, split_response_into_paragraphs
+from .chat import get_chat, create_chat
+from .tools.conversation import start_a_new_conversation
+from .tools.research import get_online_research
+from .tools.url import scrape_url
+from .tools.location import get_user_location, pending_location_requests, handle_location
+from .system_prompt import get_system_prompt
+from .utils import show_typing_indicator, split_long_message
 from typing import Final
 
 logger = logging.getLogger(__name__)
-
-client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
-
-# In-memory chat history storage
-chat_by_id: dict[int, AsyncChat] = {}
 
 # Constants for file size limits (in bytes)
 MAX_PHOTO_SIZE: Final = 20 * 1024 * 1024  # 20MB
@@ -30,18 +24,6 @@ MAX_AUDIO_SIZE: Final = 20 * 1024 * 1024  # 20MB
 MAX_DOC_SIZE: Final = 30 * 1024 * 1024   # 30MB
 MAX_TEXT_TOKENS: Final = 100000  # Maximum tokens for text content
 
-def create_chat(chat_id: int, system_instruction: str | None = None, temperature: float = 1) -> AsyncChat:
-    chat: AsyncChat = client.aio.chats.create(
-        model="gemini-2.0-flash",
-        config=types.GenerateContentConfig(
-            system_instruction=system_instruction,
-            temperature=temperature,
-            safety_settings=safety_settings,
-            tools=tools
-        )
-    )
-    chat_by_id[chat_id] = chat
-    return chat
 
 async def create_message_contents(message: TelegramMessage) -> list:
     """Prepare message contents for the model, handling images, video, audio, documents and text.
@@ -56,6 +38,11 @@ async def create_message_contents(message: TelegramMessage) -> list:
         ValueError: If file size exceeds limits or file type is unsupported
     """
     contents = []
+
+    # Handle location messages
+    if message.location:
+        contents.append(f"Location received: Latitude {message.location.latitude}, Longitude {message.location.longitude}")
+        return contents
 
     # Handle photo
     if message.photo:
@@ -165,18 +152,57 @@ async def create_message_contents(message: TelegramMessage) -> list:
 
     return contents
 
-async def handle_message(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
+
+async def handle_media_content(media_obj, max_size: int, mime_type: str) -> types.Part:
+    """Helper function to handle media content processing."""
+    if media_obj.file_size > max_size:
+        raise ValueError(f"File too large. Maximum size is {max_size // (1024*1024)}MB")
+
+    try:
+        file = await media_obj.get_file()
+        bytes_data = await file.download_as_bytearray()
+        return types.Part(
+            inline_data=types.Blob(
+                mime_type=mime_type,
+                data=bytes_data
+            )
+        )
+    except Exception as e:
+        raise ValueError(f"Failed to process media: {str(e)}")
+
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle incoming messages from users."""
     message = update.message
-    if not message or not (message.text or message.photo or message.video or message.voice or message.audio or message.document):
+    if not message:
         return
-
+    
     chat_id = update.effective_chat.id
-    chat: AsyncChat = chat_by_id.get(chat_id) or create_chat(chat_id, get_system_prompt(message))
+    
+    # If this is a location message and we have a pending request, let the location handler deal with it
+    if message.location and chat_id in pending_location_requests:
+        await handle_location(update, context)
+        return
+    
+    # Store current update for location requests
+    pending_location_requests["chat_id"] = chat_id
+    pending_location_requests["update"] = update
+    
+    chat: AsyncChat = get_chat(chat_id) or create_chat(chat_id, get_system_prompt(message))
     typing_task = asyncio.create_task(show_typing_indicator(update.effective_chat, stop_typing_event := asyncio.Event()))
+
+    # Define function mapping
+    FUNCTION_HANDLERS = {
+        "get_online_research": get_online_research,
+        "scrape_url": scrape_url,
+        "start_a_new_conversation": lambda reason=None: start_a_new_conversation(chat_id, message, reason),
+        "get_user_location": get_user_location
+    }
 
     try:
         contents = await create_message_contents(message)
+        if not contents:  # Skip empty messages
+            return
+            
         response = await chat.send_message(contents)
 
         # Sequentially process function calls
@@ -185,61 +211,30 @@ async def handle_message(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
             function_name = function_call.name
             function_args = function_call.args
 
-            try:
-                # Execute the appropriate function
-                if function_name == "get_online_research":
-                    result = await get_online_research(**function_args)
-                elif function_name == "scrape_url":
-                    result = await scrape_url(**function_args)
-                elif function_name == "start_a_new_conversation":
-                    chat = create_chat(chat_id, get_system_prompt(message))
-                    result = "Conversation reset successfully"
-                else:
-                    raise ValueError(f"Unknown function: {function_name}")
+            handler = FUNCTION_HANDLERS.get(function_name)
+            if not handler:
+                raise ValueError(f"Unknown function: {function_name}")
 
-                # Format the function response according to SDK specifications
-                function_response = {
-                    "name": function_name,
-                    "response": {
-                        "result": result if not isinstance(result, Exception) else None,
-                        "error": str(result) if isinstance(result, Exception) else None
-                    }
-                }
-
-                # Send function response back to model
-                response = await chat.send_message(
-                    types.Part.from_function_response(**function_response)
-                )
-
-            except Exception as e:
-                logger.error(f"Error executing function {function_name}: {str(e)}", exc_info=True)
-                # Send error response back to model
-                response = await chat.send_message(
-                    types.Part.from_function_response(
-                        name=function_name,
-                        response={"error": str(e)}
-                    )
-                )
+            result = await handler(**function_args) if asyncio.iscoroutinefunction(handler) else handler(**function_args)
+            response = await chat.send_message(
+                types.Part.from_function_response(**result)
+            )
 
         # Process final text response
         logger.info(f"Model response text: {response.text}")
         response_text = re.sub(r'<think>[\s\S]*?</think>', '', response.text)
 
-        # Split and send paragraphs
-        paragraphs = split_response_into_paragraphs(response_text)
-        for paragraph in paragraphs:
-            if paragraph:
-                await update.message.reply_text(
-                    markdownify(paragraph),
-                    parse_mode="MarkdownV2"
-                )
+        # Split and send message chunks
+        chunks = split_long_message(markdownify(response_text))
+        for chunk in chunks:
+            await update.message.reply_text(
+                chunk,
+                parse_mode="MarkdownV2"
+            )
 
     except Exception as e:
         logger.error(f"Error in message handling: {str(e)}", exc_info=True)
-        await update.message.reply_text(
-            "I apologize, but I encountered an error processing your request. "
-            "Please try again later or contact @ferdousbhai for support."
-        )
+        await update.message.reply_text(f"Sorry, I encountered an error 💀: {str(e)}")
     finally:
         stop_typing_event.set()
         await typing_task
