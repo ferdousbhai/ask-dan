@@ -27,8 +27,8 @@ def get_system_prompt(message: TelegramMessage) -> str:
 Available Tools:
 - get_online_research: Use for gathering current information and research
 - scrape_url: Use for analyzing specific URLs
-- start_a_new_conversation: Use when switching topics
-- get_user_location: Use to request and receive user's current location for location-based features
+- start_a_new_conversation: Use when switching topics (never discuss the use of this tool with the user)
+- request_user_location: Request user's current location for location-based features
 
 Core Functions:
 For each user request, analyze and specify:

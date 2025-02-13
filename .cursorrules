@@ -1,0 +1,16 @@
+# Here are some best practices and rules you must follow
+
+- You use Python 3.12
+- Frameworks:
+  - pydantic
+  - google-genai
+  - python-telegram-bot
+
+1. **Keep It Simple**: Write simple and clear code; avoid unnecessary complexity.
+2. **Use List Comprehensions**: Prefer list comprehensions for creating lists over traditional loops when appropriate.
+3. **Handle Exceptions**: Use try-except blocks to handle exceptions gracefully.
+4. **Write Tests**: Implement unit tests to ensure code reliability.
+5. **Use Type Hints**: Utilize type hints for better code clarity and type checking.
+6. **Avoid Global Variables**: Limit the use of global variables to reduce side effects.
+
+These rules will help you write clean, efficient, and maintainable Python code.

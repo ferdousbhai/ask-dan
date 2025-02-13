@@ -1,18 +1,15 @@
 import asyncio
 import logging
-import re
 from google.genai import types
 from google.genai.chats import AsyncChat
-from telegram import Update, Message as TelegramMessage
+from telegram import Update, Message as TelegramMessage, KeyboardButton, ReplyKeyboardMarkup
 from telegram.ext import ContextTypes
-from telegramify_markdown import markdownify
-from .chat import get_chat, create_chat
-from .tools.conversation import start_a_new_conversation
-from .tools.research import get_online_research
-from .tools.url import scrape_url
-from .location_handler import get_user_location, pending_location_requests
+from telegramify_markdown import telegramify
+from .chat import get_chat, create_chat, clear_chat
+from .functions.online_research import get_online_research
+from .functions.url import scrape_url
 from .system_prompt import get_system_prompt
-from .utils import show_typing_indicator, split_long_message
+from .utils import show_typing_indicator
 from typing import Final
 
 logger = logging.getLogger(__name__)
@@ -25,14 +22,16 @@ MAX_DOC_SIZE: Final = 30 * 1024 * 1024   # 30MB
 MAX_TEXT_TOKENS: Final = 100000  # Maximum tokens for text content
 
 
-async def create_message_contents(message: TelegramMessage) -> list:
+async def create_message_contents(message: TelegramMessage) -> list[str | types.Part]:
     """Prepare message contents for the model, handling images, video, audio, documents and text.
 
     Args:
         message: Telegram message object containing media and/or text
 
     Returns:
-        list: List of contents (media blobs and/or text) ready for the model
+        list[str | types.Part]: List of contents where each item is either
+            - str: For text content or location data
+            - types.Part: For media content (images, video, audio, PDFs)
 
     Raises:
         ValueError: If file size exceeds limits or file type is unsupported
@@ -41,114 +40,68 @@ async def create_message_contents(message: TelegramMessage) -> list:
 
     # Handle location messages
     if message.location:
-        contents.append(f"Location received: Latitude {message.location.latitude}, Longitude {message.location.longitude}")
+        contents.append(f"Location: Latitude {message.location.latitude}, Longitude {message.location.longitude}")
         return contents
 
-    # Handle photo
-    if message.photo:
-        photo = message.photo[-1]
-        if photo.file_size > MAX_PHOTO_SIZE:
-            raise ValueError(f"Image file too large. Maximum size is {MAX_PHOTO_SIZE // (1024*1024)}MB")
+    try:
+        # Handle photo
+        if message.photo:
+            photo = message.photo[-1]  # Get highest resolution photo
+            contents.append(await handle_media_content(photo, MAX_PHOTO_SIZE, "image/jpeg"))
 
-        try:
-            photo_file = await photo.get_file()
-            photo_bytes = await photo_file.download_as_bytearray()
-            contents.append(types.Part(
-                inline_data=types.Blob(
-                    mime_type="image/jpeg",
-                    data=photo_bytes
-                )
-            ))
-        except Exception as e:
-            raise ValueError(f"Failed to process image: {str(e)}")
+        # Handle video
+        elif message.video:
+            contents.append(await handle_media_content(message.video, MAX_VIDEO_SIZE, "video/mp4"))
 
-    # Handle video
-    elif message.video:
-        if message.video.file_size > MAX_VIDEO_SIZE:
-            raise ValueError(f"Video file too large. Maximum size is {MAX_VIDEO_SIZE // (1024*1024)}MB")
+        # Handle audio/voice messages
+        elif message.voice or message.audio:
+            audio_msg = message.voice or message.audio
+            mime_type = "audio/ogg" if message.voice else "audio/mpeg"
+            contents.append(await handle_media_content(audio_msg, MAX_AUDIO_SIZE, mime_type))
 
-        try:
-            video_file = await message.video.get_file()
-            video_bytes = await video_file.download_as_bytearray()
-            contents.append(types.Part(
-                inline_data=types.Blob(
-                    mime_type="video/mp4",
-                    data=video_bytes
-                )
-            ))
-        except Exception as e:
-            raise ValueError(f"Failed to process video: {str(e)}")
+        # Handle documents/files
+        elif message.document:
+            if message.document.file_size > MAX_DOC_SIZE:
+                raise ValueError(f"File size limit exceeded: Maximum allowed is {MAX_DOC_SIZE // (1024*1024)}MB")
 
-    # Handle audio/voice messages
-    elif message.voice or message.audio:
-        audio_msg = message.voice or message.audio
-        if audio_msg.file_size > MAX_AUDIO_SIZE:
-            raise ValueError(f"Audio file too large. Maximum size is {MAX_AUDIO_SIZE // (1024*1024)}MB")
-
-        try:
-            audio_file = await audio_msg.get_file()
-            audio_bytes = await audio_file.download_as_bytearray()
-            contents.append(types.Part(
-                inline_data=types.Blob(
-                    mime_type="audio/ogg" if message.voice else "audio/mpeg",
-                    data=audio_bytes
-                )
-            ))
-        except Exception as e:
-            raise ValueError(f"Failed to process audio: {str(e)}")
-
-    # Handle documents/files
-    elif message.document:
-        if message.document.file_size > MAX_DOC_SIZE:
-            raise ValueError(f"Document too large. Maximum size is {MAX_DOC_SIZE // (1024*1024)}MB")
-
-        try:
-            doc_file = await message.document.get_file()
-            doc_bytes = await doc_file.download_as_bytearray()
             mime_type = message.document.mime_type or "application/octet-stream"
 
-            # Handle PDFs
             if mime_type == "application/pdf":
-                contents.append(types.Part(
-                    inline_data=types.Blob(
-                        mime_type=mime_type,
-                        data=doc_bytes
-                    )
-                ))
-            # Handle text files
+                contents.append(await handle_media_content(message.document, MAX_DOC_SIZE, mime_type))
             elif mime_type.startswith("text/"):
+                doc_file = await message.document.get_file()
+                doc_bytes = await doc_file.download_as_bytearray()
                 try:
                     text_content = doc_bytes.decode('utf-8')
-                    # Rough estimation of tokens (1 token ≈ 4 characters)
                     if len(text_content) > MAX_TEXT_TOKENS * 4:
-                        raise ValueError(f"Text content too long. Maximum {MAX_TEXT_TOKENS} tokens allowed.")
+                        raise ValueError(f"Text length limit exceeded: Maximum {MAX_TEXT_TOKENS} tokens allowed")
                     contents.append(text_content)
                 except UnicodeDecodeError:
-                    raise ValueError("Unable to decode text file. Please ensure it's in UTF-8 encoding.")
+                    raise ValueError("Invalid file encoding: Please ensure the text file is UTF-8 encoded")
             else:
                 supported_types = ["PDF documents", "text files"]
                 raise ValueError(
                     f"Unsupported file type: {mime_type}. "
-                    f"Currently supporting: {', '.join(supported_types)}."
+                    f"Supported formats are: {', '.join(supported_types)}"
                 )
-        except Exception as e:
-            raise ValueError(f"Failed to process document: {str(e)}")
 
-    # Handle text content for any media
-    text_content = message.caption or message.text
-    if text_content:
-        # Rough token count check for text
-        if len(text_content) > MAX_TEXT_TOKENS * 4:
-            raise ValueError(f"Text content too long. Maximum {MAX_TEXT_TOKENS} tokens allowed.")
-        contents.append(text_content)
-    elif message.photo:
-        contents.append("Please analyze and describe this image.")
-    elif message.video:
-        contents.append("Please analyze and describe this video.")
-    elif message.voice or message.audio:
-        contents.append("Please transcribe and analyze this audio content.")
-    elif message.document and message.document.mime_type == "application/pdf":
-        contents.append("Please analyze and summarize this PDF document.")
+        # Handle text content for any media
+        text_content = message.caption or message.text
+        if text_content:
+            if len(text_content) > MAX_TEXT_TOKENS * 4:
+                raise ValueError(f"Text length limit exceeded: Maximum {MAX_TEXT_TOKENS} tokens allowed")
+            contents.append(text_content)
+        elif message.photo:
+            contents.append("here's an image.")
+        elif message.video:
+            contents.append("here's a video.")
+        elif message.voice or message.audio:
+            contents.append("here's an audio message.")
+        elif message.document and message.document.mime_type == "application/pdf":
+            contents.append("here's a PDF document.")
+
+    except Exception as e:
+        raise ValueError(f"Content processing error: {str(e)}")
 
     return contents
 
@@ -156,7 +109,7 @@ async def create_message_contents(message: TelegramMessage) -> list:
 async def handle_media_content(media_obj, max_size: int, mime_type: str) -> types.Part:
     """Helper function to handle media content processing."""
     if media_obj.file_size > max_size:
-        raise ValueError(f"File too large. Maximum size is {max_size // (1024*1024)}MB")
+        raise ValueError(f"File size limit exceeded: Maximum allowed is {max_size // (1024*1024)}MB")
 
     try:
         file = await media_obj.get_file()
@@ -168,9 +121,10 @@ async def handle_media_content(media_obj, max_size: int, mime_type: str) -> type
             )
         )
     except Exception as e:
-        raise ValueError(f"Failed to process media: {str(e)}")
+        raise ValueError(f"Media processing error: {str(e)}")
 
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+
+async def handle_message(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle incoming messages from users."""
     message = update.message
     if not message:
@@ -178,26 +132,24 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     chat_id = update.effective_chat.id
 
-    # Skip location messages as they're handled by location_handler
-    if message.location:
-        return
-
     chat: AsyncChat = get_chat(chat_id) or create_chat(chat_id, get_system_prompt(message))
     typing_task = asyncio.create_task(show_typing_indicator(update.effective_chat, stop_typing_event := asyncio.Event()))
 
-    # Define function mapping
     FUNCTION_HANDLERS = {
         "get_online_research": get_online_research,
         "scrape_url": scrape_url,
-        "start_a_new_conversation": lambda reason=None: start_a_new_conversation(chat_id, message, reason),
-        "get_user_location": get_user_location
+        "start_a_new_conversation": lambda _: clear_chat(update.effective_chat.id),
+        "request_user_location": lambda text_to_send: asyncio.create_task(update.message.reply_text(
+                text_to_send,
+                reply_markup=ReplyKeyboardMarkup(
+                    [[KeyboardButton("Share Location 📍", request_location=True)]],
+                    one_time_keyboard=True
+                )
+            )) and None # Return None to break out of the message handling loop
     }
 
     try:
         contents = await create_message_contents(message)
-        if not contents:  # Skip empty messages
-            return
-
         response = await chat.send_message(contents)
 
         # Process function calls one at a time
@@ -207,42 +159,32 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             function_args = function_call.args
 
             handler = FUNCTION_HANDLERS.get(function_name)
-            if not handler:
-                raise ValueError(f"Unknown function: {function_name}")
-
-            # Handle location requests specially
-            if function_name == "get_user_location":
-                logger.info(f"Processing location request for chat_id: {chat_id}")
-                # Store current context for the location request
-                pending_location_requests["chat_id"] = chat_id
-                pending_location_requests["update"] = update
-
-            result = await handler(**function_args) if asyncio.iscoroutinefunction(handler) else handler(**function_args)
-
-            if result["response"]["error"]:
-                await update.message.reply_text(
-                    result["response"]["error"].replace(".", "\\."),  # Escape periods
-                    parse_mode="MarkdownV2"
-                )
-                return
+            try:
+                if not handler:
+                    function_response = {"error": f"Unknown function: {function_name}"}
+                else:
+                    result = await handler(**function_args) if asyncio.iscoroutinefunction(handler) else handler(**function_args)
+                    if result is None:
+                        return  # Exit early if no response is required from the tool
+                    function_response = {"output": result}
+            except Exception as e:
+                function_response = {"error": str(e)}
 
             response = await chat.send_message(
-                types.Part.from_function_response(**result)
+                types.Part.from_function_response(
+                    name=function_name,
+                    response=function_response
+                )
             )
 
-        # Process final text response
-        logger.info(f"Model response text: {response.text}")
-        response_text = re.sub(r'<think>[\s\S]*?</think>', '', response.text)
-
-        # Split and send message chunks
-        chunks = split_long_message(markdownify(response_text))
-        for chunk in chunks:
-            # Escape periods in numbers but preserve markdown
-            chunk = re.sub(r'(\d+)\.(\d+)', r'\1\\\.\2', chunk)
-            await update.message.reply_text(
-                chunk,
-                parse_mode="MarkdownV2"
-            )
+        # Only try to send text response if there's actual text content
+        if response.text:
+            chunks = await telegramify(response.text)
+            for chunk in chunks:
+                await update.message.reply_text(
+                    chunk.content,
+                    parse_mode="MarkdownV2",
+                )
 
     except Exception as e:
         logger.error(f"Error in message handling: {str(e)}", exc_info=True)

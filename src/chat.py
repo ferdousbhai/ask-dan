@@ -2,8 +2,8 @@ import os
 from google import genai
 from google.genai import types
 from google.genai.chats import AsyncChat
-from .tools.schema import tools
-from .safety import safety_settings
+from .functions.schema import tools
+from .safety_settings import safety_settings
 
 client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
 
@@ -26,6 +26,8 @@ def create_chat(chat_id: int, system_instruction: str, temperature: float = 1.2,
     chat_by_id[chat_id] = chat
     return chat
 
-def clear_chat(chat_id: int) -> None:
+def clear_chat(chat_id: int) -> bool:
     if chat_id in chat_by_id:
         del chat_by_id[chat_id]
+        return True
+    return False
