@@ -2,7 +2,7 @@ import asyncio
 import logging
 from google.genai import types
 from google.genai.chats import AsyncChat
-from telegram import Update, Message as TelegramMessage, KeyboardButton, ReplyKeyboardMarkup
+from telegram import Update, Message as TelegramMessage, KeyboardButton, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import ContextTypes
 from telegramify_markdown import telegramify
 from .chat import get_chat, create_chat, clear_chat
@@ -135,17 +135,21 @@ async def handle_message(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
     chat: AsyncChat = get_chat(chat_id) or create_chat(chat_id, get_system_prompt(message))
     typing_task = asyncio.create_task(show_typing_indicator(update.effective_chat, stop_typing_event := asyncio.Event()))
 
+    async def request_location(text_to_send: str):
+        await update.message.reply_text(
+            text_to_send,
+            reply_markup=ReplyKeyboardMarkup(
+                [[KeyboardButton("Share Location 📍", request_location=True)]],
+                one_time_keyboard=True
+            )
+        )
+        return None
+
     FUNCTION_HANDLERS = {
+        "start_a_new_conversation": lambda reason: clear_chat(update.effective_chat.id, reason),
         "get_online_research": get_online_research,
         "scrape_url": scrape_url,
-        "start_a_new_conversation": lambda _: clear_chat(update.effective_chat.id),
-        "request_user_location": lambda text_to_send: asyncio.create_task(update.message.reply_text(
-                text_to_send,
-                reply_markup=ReplyKeyboardMarkup(
-                    [[KeyboardButton("Share Location 📍", request_location=True)]],
-                    one_time_keyboard=True
-                )
-            )) and None # Return None to break out of the message handling loop
+        "request_user_location": request_location
     }
 
     try:
@@ -159,6 +163,7 @@ async def handle_message(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
             function_args = function_call.args
 
             handler = FUNCTION_HANDLERS.get(function_name)
+            logger.info(f"Function call: {function_name} with args: {function_args}")
             try:
                 if not handler:
                     function_response = {"error": f"Unknown function: {function_name}"}

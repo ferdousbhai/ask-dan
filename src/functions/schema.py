@@ -8,12 +8,12 @@ function_declarations = [
         parameters=types.Schema(
             type="OBJECT",
             properties={
-                "_": types.Schema(
+                "reason": types.Schema(
                     type="STRING",
                     description="The reason for starting a new conversation"
                 )
             },
-            required=["_"]
+            required=["reason"]
         )
     ),
     types.FunctionDeclaration(
