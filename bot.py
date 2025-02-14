@@ -42,7 +42,7 @@ def main() -> None:
 
     application.add_handler(MessageHandler(
         (filters.TEXT | filters.PHOTO | filters.VIDEO | filters.VOICE |
-         filters.AUDIO | document_filter | filters.LOCATION) & ~filters.COMMAND,
+        filters.AUDIO | document_filter | filters.LOCATION) & ~filters.COMMAND,
         handle_message
     ))
 

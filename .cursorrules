@@ -8,9 +8,11 @@
 
 1. **Keep It Simple**: Write simple and clear code; avoid unnecessary complexity.
 2. **Use List Comprehensions**: Prefer list comprehensions for creating lists over traditional loops when appropriate.
-3. **Handle Exceptions**: Use try-except blocks to handle exceptions gracefully.
-4. **Write Tests**: Implement unit tests to ensure code reliability.
-5. **Use Type Hints**: Utilize type hints for better code clarity and type checking.
-6. **Avoid Global Variables**: Limit the use of global variables to reduce side effects.
+3. Use modern python syntax, for example, `list[T]`, `dict[K, V]`, etc. instead of `List[T]`, `Dict[K, V]`, etc. Use `| None` instead of `Optional[T]`.
+4. **Handle Exceptions**: Use try-except blocks to handle exceptions gracefully.
+5. **Write Tests**: Implement unit tests to ensure code reliability.
+6. **Use Type Hints**: Utilize type hints for better code clarity and type checking.
+7. **Avoid Global Variables**: Limit the use of global variables to reduce side effects.
+8. Prefer using existing libraries and modules instead of reinventing the wheel.
 
 These rules will help you write clean, efficient, and maintainable Python code.

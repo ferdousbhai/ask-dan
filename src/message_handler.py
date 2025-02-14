@@ -1,8 +1,9 @@
 import asyncio
 import logging
+import re
 from google.genai import types
 from google.genai.chats import AsyncChat
-from telegram import Update, Message as TelegramMessage, KeyboardButton, ReplyKeyboardMarkup, ReplyKeyboardRemove
+from telegram import Update, Message as TelegramMessage, KeyboardButton, ReplyKeyboardMarkup
 from telegram.ext import ContextTypes
 from telegramify_markdown import telegramify
 from .chat import get_chat, create_chat, clear_chat
@@ -11,6 +12,8 @@ from .functions.url import scrape_url
 from .system_prompt import get_system_prompt
 from .utils import show_typing_indicator
 from typing import Final
+from .functions.location_services import get_location_info, search_nearby_places, get_place_details
+from .functions.contact_dev import contact_dev
 
 logger = logging.getLogger(__name__)
 
@@ -145,11 +148,16 @@ async def handle_message(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
         )
         return None
 
+
     FUNCTION_HANDLERS = {
         "start_a_new_conversation": lambda reason: clear_chat(update.effective_chat.id, reason),
         "get_online_research": get_online_research,
         "scrape_url": scrape_url,
-        "request_user_location": request_location
+        "request_user_location": request_location,
+        "get_location_info": get_location_info,
+        "search_nearby_places": search_nearby_places,
+        "get_place_details": get_place_details,
+        "contact_dev": contact_dev,
     }
 
     try:
@@ -184,7 +192,9 @@ async def handle_message(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
 
         # Only try to send text response if there's actual text content
         if response.text:
-            chunks = await telegramify(response.text)
+            # exclude the content between <think> tags
+            text_without_think = re.sub(r'<think>(.*?)</think>', '', response.text, flags=re.DOTALL)
+            chunks = await telegramify(text_without_think)
             for chunk in chunks:
                 await update.message.reply_text(
                     chunk.content,

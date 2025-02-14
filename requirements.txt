@@ -3,7 +3,8 @@ httpx
 pydantic
 python-dotenv
 python-telegram-bot
-telegramify-markdown
+telegramify-markdown[mermaid]
 openai
 google-genai
 firecrawl-py
+googlemaps

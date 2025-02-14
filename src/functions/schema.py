@@ -57,7 +57,76 @@ function_declarations = [
             },
             required=["text_to_send"]
         )
-    )
+    ),
+    types.FunctionDeclaration(
+        name="get_location_info",
+        description="Get detailed location information from coordinates",
+        parameters=types.Schema(
+            type="OBJECT",
+            properties={
+                "coordinates_str": types.Schema(
+                    type="STRING",
+                    description="Coordinates string in format 'latitude,longitude' (e.g. '37.7955,-122.3937')"
+                )
+            },
+            required=["coordinates_str"]
+        )
+    ),
+    types.FunctionDeclaration(
+        name="search_nearby_places",
+        description="Search for places near given coordinates",
+        parameters=types.Schema(
+            type="OBJECT",
+            properties={
+                "query": types.Schema(
+                    type="STRING",
+                    description="JSON string containing: coordinates (required, format: 'lat,lon'), keyword (optional), radius (optional, meters, max 50000), place_type (optional)"
+                )
+            },
+            required=["query"]
+        )
+    ),
+    types.FunctionDeclaration(
+        name="get_place_details",
+        description="Get detailed information about a specific place",
+        parameters=types.Schema(
+            type="OBJECT",
+            properties={
+                "place_id": types.Schema(
+                    type="STRING",
+                    description="Google Places ID string"
+                )
+            },
+            required=["place_id"]
+        )
+    ),
+    types.FunctionDeclaration(
+        name="contact_dev",
+        description="Contact the developer about issues, feature requests, or concerning user behavior",
+        parameters=types.Schema(
+            type="OBJECT",
+            properties={
+                "issue_type": types.Schema(
+                    type="STRING",
+                    description="Type of issue (e.g., 'Error Report', 'Feature Request', 'User Report', 'Missing Tool')",
+                    enum=["Error Report", "Feature Request", "User Report", "Missing Tool"]
+                ),
+                "description": types.Schema(
+                    type="STRING",
+                    description="Detailed description of the issue or request"
+                ),
+                "user_info": types.Schema(
+                    type="STRING",
+                    description="Information about the user (if relevant)"
+                ),
+                "suggested_solution": types.Schema(
+                    type="STRING",
+                    description="Suggested solution or implementation details (if applicable)"
+                )
+            },
+            required=["issue_type", "description"]
+        )
+    ),
 ]
 
 # Wrap function declarations in a Tool object
